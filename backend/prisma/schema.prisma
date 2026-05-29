@@ -1,0 +1,137 @@
+// Team Task Tracker — data model.
+//
+// This file doubles as the schema "diagram" deliverable: relations, enums, and
+// indexes are all expressed here. Key design decisions are documented inline and
+// expanded in the project README.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ──────────────────────────── Enums ────────────────────────────
+
+enum Role {
+  ADMIN // full access within the org: users, projects, tasks
+  MANAGER // projects + tasks, assign members; cannot manage users
+  MEMBER // view/update only tasks assigned to them
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  IN_REVIEW
+  DONE
+  BLOCKED
+}
+
+// ──────────────────────────── Models ────────────────────────────
+
+model Organization {
+  id        String   @id @default(uuid())
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users    User[]
+  projects Project[]
+  tasks    Task[]
+}
+
+model User {
+  id             String   @id @default(uuid())
+  organizationId String
+  email          String   @unique // global-unique: keeps login a single lookup by email
+  name           String
+  passwordHash   String // argon2id hash — never the raw password
+  role           Role     @default(MEMBER)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization  Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  assignedTasks Task[]         @relation("TaskAssignee")
+  refreshTokens RefreshToken[]
+
+  // Most user lookups are org-scoped (e.g. ADMIN listing members).
+  @@index([organizationId])
+}
+
+model Project {
+  id             String   @id @default(uuid())
+  organizationId String
+  name           String
+  description    String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  tasks        Task[]
+
+  @@index([organizationId])
+}
+
+model Task {
+  id          String     @id @default(uuid())
+  title       String
+  description String?
+  priority    Priority   @default(MEDIUM)
+  status      TaskStatus @default(TODO)
+  dueDate     DateTime?
+
+  // organizationId is denormalized onto Task (it's reachable via project) so the
+  // hottest query — "tasks for an assignee within an org, filtered by status" — is
+  // served by a single index with no join, and org-scoping in guards stays a cheap
+  // column check. Documented as the README design decision.
+  organizationId String
+  projectId      String
+  assigneeId     String?
+
+  // Stamped when status first reaches DONE. Lets the analytics endpoint compute
+  // average completion time (completedAt - createdAt) without a separate audit table.
+  completedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  project      Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  assignee     User?        @relation("TaskAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+
+  // Composite index: equality columns (assigneeId) before the frequently-filtered
+  // status. Serves "my tasks", "my tasks by status", and assignee-scoped lists from
+  // one B-tree, which a planner intersecting two single-column indexes can't match.
+  @@index([assigneeId, status])
+  // Range scans for due / overdue queries (analytics, sorting by deadline).
+  @@index([dueDate])
+  // Org- and project-scoped listings.
+  @@index([organizationId, status])
+  @@index([projectId])
+}
+
+// Refresh tokens are persisted (hashed) to support rotation + reuse detection.
+// A `family` groups all tokens descended from one login; replaying a revoked token
+// lets us revoke the entire family, containing a stolen-token attack.
+model RefreshToken {
+  id        String   @id @default(uuid())
+  userId    String
+  tokenHash String   @unique // sha-256 of the raw token; raw value is never stored
+  family    String // shared across a rotation chain from a single login
+  expiresAt DateTime
+  revokedAt DateTime? // set when rotated out or when the family is revoked
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([family])
+}
