@@ -1,0 +1,50 @@
+# Local infrastructure for the Team Task Tracker API.
+#
+# During development we bring up only the data stores:
+#     docker compose up -d postgres redis
+# and run the API on the host with `npm run start:dev` for fast hot-reload.
+#
+# The `api` service (added in the containerization step) lets a reviewer run the
+# entire stack with a single `docker compose up` and hit the API with no manual setup.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: tasktracker_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: taskuser
+      POSTGRES_PASSWORD: taskpass
+      POSTGRES_DB: task_tracker
+    # Host port 5433 (not 5432) to avoid clashing with a local Postgres install.
+    # Container-internal port stays 5432, so the in-Docker `api` service is unaffected.
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    # The API container waits on this healthcheck so migrations never race a
+    # database that isn't accepting connections yet.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U taskuser -d task_tracker"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: tasktracker_redis
+    restart: unless-stopped
+    # Host port 6380 to avoid clashing with a local Redis install (container stays 6379).
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+  redis_data:
