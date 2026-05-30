@@ -1,11 +1,11 @@
-# Local infrastructure for the Team Task Tracker API.
+# Full stack for the Team Task Tracker API.
 #
-# During development we bring up only the data stores:
-#     docker compose up -d postgres redis
-# and run the API on the host with `npm run start:dev` for fast hot-reload.
+#   docker compose up            -> postgres + redis + api (zero manual setup)
+#   docker compose up -d postgres redis  -> data stores only, for host dev
+#                                           (`cd backend && npm run start:dev`)
 #
-# The `api` service (added in the containerization step) lets a reviewer run the
-# entire stack with a single `docker compose up` and hit the API with no manual setup.
+# Inside the network, services reach each other by name on their internal ports
+# (postgres:5432, redis:6379). Host ports are remapped to avoid local clashes.
 
 services:
   postgres:
@@ -44,6 +44,32 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: tasktracker_api
+    restart: unless-stopped
+    # Wait for both stores to be healthy so migrations and cache work on boot.
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      # Connect to the other services by name on their internal ports.
+      DATABASE_URL: postgresql://taskuser:taskpass@postgres:5432/task_tracker?schema=public
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      JWT_ACCESS_SECRET: dev_access_secret_change_me
+      JWT_ACCESS_TTL: 15m
+      JWT_REFRESH_SECRET: dev_refresh_secret_change_me
+      JWT_REFRESH_TTL: 7d
+      PORT: 3000
+      TASK_CACHE_TTL: 60
+    ports:
+      - "3000:3000"
 
 volumes:
   postgres_data:
