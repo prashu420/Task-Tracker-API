@@ -5,8 +5,6 @@ import {
   Get,
   HttpCode,
   HttpStatus,
-  Param,
-  ParseUUIDPipe,
   Patch,
   Post,
   Query,
@@ -73,7 +71,7 @@ export class TasksController {
   @Roles(Role.ADMIN, Role.MANAGER)
   @UseGuards(TaskAccessGuard)
   @HttpCode(HttpStatus.NO_CONTENT)
-  remove(@Param('id', ParseUUIDPipe) id: string) {
-    return this.tasks.remove(id);
+  remove(@LoadedTask() task: Task) {
+    return this.tasks.remove(task);
   }
 }

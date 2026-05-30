@@ -10,11 +10,20 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CreateTaskDto } from './dto/create-task.dto';
 import { ListTasksDto } from './dto/list-tasks.dto';
 import { UpdateTaskDto } from './dto/update-task.dto';
+import { TaskCacheService } from './task-cache.service';
 import { canTransition } from './task-status';
+
+export interface TaskListResult {
+  data: Task[];
+  pagination: { page: number; limit: number; total: number; totalPages: number };
+}
 
 @Injectable()
 export class TasksService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly cache: TaskCacheService,
+  ) {}
 
   async create(user: AuthUser, dto: CreateTaskDto): Promise<Task> {
     await this.assertProjectInOrg(user.organizationId, dto.projectId);
@@ -22,7 +31,7 @@ export class TasksService {
       await this.assertAssigneeInOrg(user.organizationId, dto.assigneeId);
     }
 
-    return this.prisma.task.create({
+    const task = await this.prisma.task.create({
       data: {
         title: dto.title,
         description: dto.description,
@@ -33,10 +42,30 @@ export class TasksService {
         organizationId: user.organizationId,
       },
     });
+
+    await this.cache.invalidateAssignee(task.assigneeId);
+    return task;
   }
 
-  /** Paginated, filtered list. MEMBERs are always scoped to their own tasks. */
-  async list(user: AuthUser, query: ListTasksDto) {
+  /**
+   * Paginated, filtered list. MEMBERs are always scoped to their own tasks.
+   * Cache-aside: results are cached only when the list is scoped to a single
+   * assignee (a MEMBER's own list, or an ADMIN/MANAGER filtering by assigneeId),
+   * which keeps invalidation precise — a task write touches exactly one or two
+   * assignees. Org-wide listings are not cached.
+   */
+  async list(user: AuthUser, query: ListTasksDto): Promise<TaskListResult> {
+    const cacheAssignee =
+      user.role === Role.MEMBER ? user.userId : query.assigneeId;
+    const cacheKey = cacheAssignee
+      ? this.cache.buildKey(user.organizationId, cacheAssignee, query)
+      : null;
+
+    if (cacheKey) {
+      const cached = await this.cache.get<TaskListResult>(cacheKey);
+      if (cached) return cached;
+    }
+
     const page = query.page ?? 1;
     const limit = query.limit ?? 20;
 
@@ -61,10 +90,15 @@ export class TasksService {
       this.prisma.task.count({ where }),
     ]);
 
-    return {
+    const result: TaskListResult = {
       data,
       pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
     };
+
+    if (cacheKey && cacheAssignee) {
+      await this.cache.set(cacheKey, cacheAssignee, result);
+    }
+    return result;
   }
 
   /**
@@ -82,7 +116,7 @@ export class TasksService {
       await this.assertAssigneeInOrg(user.organizationId, dto.assigneeId);
     }
 
-    return this.prisma.task.update({
+    const updated = await this.prisma.task.update({
       where: { id: task.id },
       data: {
         title: dto.title,
@@ -92,6 +126,14 @@ export class TasksService {
         dueDate: dto.dueDate ? new Date(dto.dueDate) : undefined,
       },
     });
+
+    // Always refresh the old assignee's cache; on reassignment refresh the new
+    // one too, so neither sees a stale list.
+    await this.cache.invalidateAssignee(task.assigneeId);
+    if (dto.assigneeId !== undefined && dto.assigneeId !== task.assigneeId) {
+      await this.cache.invalidateAssignee(dto.assigneeId);
+    }
+    return updated;
   }
 
   /** Advance status through the state machine; stamp completedAt on DONE. */
@@ -103,17 +145,21 @@ export class TasksService {
       });
     }
 
-    return this.prisma.task.update({
+    const updated = await this.prisma.task.update({
       where: { id: task.id },
       data: {
         status: to,
         completedAt: to === TaskStatus.DONE ? new Date() : task.completedAt,
       },
     });
+
+    await this.cache.invalidateAssignee(task.assigneeId);
+    return updated;
   }
 
-  async remove(taskId: string): Promise<void> {
-    await this.prisma.task.delete({ where: { id: taskId } });
+  async remove(task: Task): Promise<void> {
+    await this.prisma.task.delete({ where: { id: task.id } });
+    await this.cache.invalidateAssignee(task.assigneeId);
   }
 
   // ── helpers ────────────────────────────────────────────────────────────────
