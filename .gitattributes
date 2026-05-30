@@ -1,0 +1,3 @@
+# Normalise line endings to LF in the repo so Windows/WSL/Linux checkouts are
+# consistent and Git stops warning about CRLF conversion.
+* text=auto eol=lf
