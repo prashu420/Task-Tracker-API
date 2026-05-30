@@ -3,6 +3,7 @@ import {
   Get,
   ServiceUnavailableException,
 } from '@nestjs/common';
+import { Public } from '../common/decorators/public.decorator';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
 
@@ -18,6 +19,7 @@ export class HealthController {
     private readonly redis: RedisService,
   ) {}
 
+  @Public()
   @Get()
   async check() {
     // Probe both in parallel; allSettled so one failure still reports the other.

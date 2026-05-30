@@ -6,8 +6,8 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { Role, User } from '@prisma/client';
-import * as argon2 from 'argon2';
 import { createHash, randomBytes } from 'crypto';
+import { hashPassword, verifyPassword } from '../common/security/password';
 import { parseDurationToMs } from '../common/utils/duration';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthTokens, JwtPayload } from './auth.types';
@@ -34,7 +34,7 @@ export class AuthService {
       });
     }
 
-    const passwordHash = await this.hashPassword(dto.password);
+    const passwordHash = await hashPassword(dto.password);
 
     // Org + admin must be created atomically — a half-created tenant is useless.
     const user = await this.prisma.$transaction(async (tx) => {
@@ -68,7 +68,7 @@ export class AuthService {
     });
     if (!user) throw invalid;
 
-    const ok = await argon2.verify(user.passwordHash, dto.password);
+    const ok = await verifyPassword(user.passwordHash, dto.password);
     if (!ok) throw invalid;
 
     return this.issueTokens(user);
@@ -191,9 +191,5 @@ export class AuthService {
 
   private sha256(value: string): string {
     return createHash('sha256').update(value).digest('hex');
-  }
-
-  private async hashPassword(password: string): Promise<string> {
-    return argon2.hash(password, { type: argon2.argon2id });
   }
 }
