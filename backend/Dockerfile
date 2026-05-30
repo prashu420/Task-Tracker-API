@@ -37,5 +37,5 @@ COPY package*.json ./
 
 EXPOSE 3000
 
-# Apply pending migrations against the (healthy) database, then start the API.
-CMD ["sh", "-c", "npx prisma migrate deploy && node dist/main"]
+# Apply migrations, seed idempotent demo data, then start the API.
+CMD ["sh", "-c", "npx prisma migrate deploy && node prisma/seed.js && node dist/main"]
