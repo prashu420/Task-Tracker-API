@@ -46,6 +46,59 @@ The seed also creates a sample project and two tasks assigned to the member.
 2. `POST /api/auth/login` → **Try it out** with one of the accounts above → copy the `accessToken`.
 3. Click **Authorize** (top-right), paste the token (no `Bearer ` prefix) → now the protected endpoints are callable.
 
+### Example walkthrough (curl)
+
+A full flow a reviewer can run end-to-end. Replace the `<...>` placeholders with
+values from the previous responses.
+
+```bash
+# 1. Log in as the seeded admin -> returns accessToken + refreshToken
+curl -s -X POST http://localhost:3000/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"admin@acme.com","password":"Password123!"}'
+
+TOKEN="<accessToken from step 1>"
+
+# 2. Create a project
+curl -s -X POST http://localhost:3000/api/projects \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"name":"Q3 Launch","description":"Launch workstream"}'
+
+# 3. Create a task in that project (assigneeId optional)
+curl -s -X POST http://localhost:3000/api/tasks \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"title":"Draft brief","priority":"HIGH","projectId":"<projectId>"}'
+
+# 4. List tasks with filters + pagination
+curl -s "http://localhost:3000/api/tasks?status=TODO&priority=HIGH&page=1&limit=10" \
+  -H "Authorization: Bearer $TOKEN"
+
+# 5. Advance status through the state machine
+curl -s -X PATCH http://localhost:3000/api/tasks/<taskId>/status \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"status":"IN_PROGRESS"}'
+
+# 6. Rotate the refresh token (old one is single-use afterwards)
+curl -s -X POST http://localhost:3000/api/auth/refresh \
+  -H 'Content-Type: application/json' \
+  -d '{"refreshToken":"<refreshToken from step 1>"}'
+```
+
+**Verify RBAC** — log in as `member@acme.com` / `Password123!` and try an
+ADMIN/MANAGER-only action; it returns `403`:
+
+```bash
+# get a MEMBER token, then attempt to create a task
+curl -s -X POST http://localhost:3000/api/tasks \
+  -H "Authorization: Bearer <member accessToken>" -H 'Content-Type: application/json' \
+  -d '{"title":"x","projectId":"<projectId>"}'
+# -> { "status": 403, "code": "FORBIDDEN", "message": "..." }
+```
+
+An invalid status jump (e.g. `TODO` → `DONE`) returns
+`422 INVALID_STATUS_TRANSITION`, and a past `dueDate` returns
+`400 VALIDATION_ERROR`.
+
 ---
 
 ## Architecture
@@ -279,6 +332,7 @@ Full interactive documentation (request/response schemas, every endpoint) is at
 | POST | `/api/auth/logout` | public |
 | POST | `/api/users` | ADMIN |
 | GET | `/api/users` | ADMIN |
+| PATCH / DELETE | `/api/users/:id` | ADMIN |
 | POST | `/api/projects` | ADMIN, MANAGER |
 | GET | `/api/projects` · `/api/projects/:id` | any authenticated |
 | PATCH / DELETE | `/api/projects/:id` | ADMIN, MANAGER |
