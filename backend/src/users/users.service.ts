@@ -1,8 +1,14 @@
-import { ConflictException, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { hashPassword } from '../common/security/password';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateUserDto } from './dto/create-user.dto';
+import { UpdateUserDto } from './dto/update-user.dto';
 
 // Never expose passwordHash; this projection is the public shape of a user.
 const PUBLIC_USER = {
@@ -49,5 +55,38 @@ export class UsersService {
       select: PUBLIC_USER,
       orderBy: { createdAt: 'asc' },
     });
+  }
+
+  /** Update a user's name/role within the caller's organization. */
+  async update(organizationId: string, id: string, dto: UpdateUserDto) {
+    await this.assertInOrg(organizationId, id);
+    return this.prisma.user.update({
+      where: { id },
+      data: { name: dto.name, role: dto.role },
+      select: PUBLIC_USER,
+    });
+  }
+
+  /** Remove a user from the caller's organization (cannot remove yourself). */
+  async remove(organizationId: string, id: string, requesterId: string) {
+    if (id === requesterId) {
+      throw new BadRequestException({
+        code: 'INVALID_OPERATION',
+        message: 'You cannot delete your own account',
+      });
+    }
+    await this.assertInOrg(organizationId, id);
+    await this.prisma.user.delete({ where: { id } });
+  }
+
+  /** Existence check scoped to the org — cross-org ids look like 404s. */
+  private async assertInOrg(organizationId: string, id: string) {
+    const user = await this.prisma.user.findFirst({
+      where: { id, organizationId },
+      select: { id: true },
+    });
+    if (!user) {
+      throw new NotFoundException({ code: 'NOT_FOUND', message: 'User not found' });
+    }
   }
 }
